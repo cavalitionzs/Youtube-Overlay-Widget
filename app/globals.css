@@ -1,0 +1,38 @@
+:root {
+  --ink: #0d0f0c;
+  --panel: #141715;
+  --panel-edge: #22271f;
+  --green: #3ddc72;
+  --green-dim: #1f7a41;
+  --paper: #f3f5ef;
+  --muted: #9aa39a;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", ui-sans-serif, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--sans);
+}
+
+.page-dashboard {
+  background: radial-gradient(900px 500px at 15% -10%, #163024 0%, transparent 60%), var(--ink);
+  color: var(--paper);
+  min-height: 100vh;
+}
+
+.page-widget {
+  background: transparent;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}

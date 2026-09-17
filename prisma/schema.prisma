@@ -1,0 +1,33 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model YoutubeCredentials {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  YOUTUBE_API_KEY  String @db.VarChar(500)
+  YOUTUBE_VIDEO_ID String @db.VarChar(500)
+}
+
+model YoutubeChatState {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  liveChatId    String? @db.VarChar(200)
+  nextPageToken String? @db.VarChar(1000)
+}
+
+model QueueItem {
+  id          Int      @id @default(autoincrement())
+  videoId     String   @db.VarChar(50)
+  title       String   @db.VarChar(500)
+  requestedBy String   @db.VarChar(200)
+  requestedAt DateTime @default(now())
+}
