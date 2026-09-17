@@ -50,7 +50,9 @@ cp .env.local.example .env.local
    ```bash
    npx prisma db push
    ```
-   This reads `prisma/schema.prisma` (the `YoutubeCredentials` model) and creates the table in the database specified by `DATABASE_URL`. Run this command again whenever `schema.prisma` is modified.
+   This reads `prisma/schema.prisma` (the `YoutubeCredentials` model) and
+   creates the table in the database specified by `DATABASE_URL`.
+   Run this command again whenever `schema.prisma` is modified.
 
 Technical note: `prisma/schema.prisma` uses the `prisma-client` generator (instead of the older `prisma-client-js`) with a custom output pointing to lib/generated/prisma. This generator connects to the database through a **driver adapter** (`@prisma/adapter-pg`), rather than the built-in query engine — which is why `lib/prisma.ts` creates `PrismaClient` with `new PrismaClient({ adapter })`, rather than simply using `new PrismaClient()`. The generated output folder (lib/generated/) is ignored through `.gitignore` and recreated automatically by `prisma generate` (which runs automatically through `postinstall` whenever `npm install` is executed).
 
@@ -58,8 +60,7 @@ Optional: `npm run db:studio` opens Prisma Studio so you can view or modify the 
 
 ## 3. Setup YouTube API Key & Video ID
 
-Unlike before, YouTube credentials are no longer stored in .env —
-they are managed directly from the application dashboard:
+Unlike before, YouTube credentials are no longer stored in .env — they are managed directly from the application dashboard:
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/), create a
    project, enable **YouTube Data API v3**, and create an **API key**.
@@ -85,7 +86,7 @@ Open `http://localhost:3000` to manage the configuration and view the widget lin
 
 Copy the widget URL from the dashboard (`http://localhost:3000/widget?youtube=1`), then in OBS: **Sources → + → Browser**, paste the URL, and set the size according to your scene (this widget also plays the video, so give it enough space to actually watch it rather than using only a small strip).
 
-The `?youtube=1` parameter makes that widget instance also monitor YouTube chat. If you place the same widget in multiple scenes, only **one** instance should use `?youtube=1` — the others should omit the parameter so they only follow the queue(mirror) and do not independently poll YouTube chat.
+The `?youtube=1` parameter makes that widget instance also monitor YouTube chat. If you place the same widget in multiple scenes only **one** instance should use `?youtube=1` — the others should omit the parameter so they only follow the queue (mirror) and do not independently poll YouTube chat.
 
 ## How the Song Request Flow Works
 
@@ -109,11 +110,15 @@ A stored `liveChatId` is automatically reset (and then resolved again from the V
 
 ## Production Notes
 
-- YouTube configuration (API Key + Video ID) is stored in Postgres through
-   Prisma — making it safe to deploy to platforms with read-only/ephemeral filesystems (such as Vercel), since this configuration no longer depends on local files or `.env` for persistent data.
-- The song queue & live chat state (`liveChatId`, `nextPageToken`) are still stored in
-   `data/state.json` (a local file) — this is suitable for personal/single-stream usage running on a single server/process. If deployed to a serverless platform, this part should also be moved to external storage (such as an additional Postgres table or Redis/Upstash) so the state remains consistent with the Prisma-based approach above.
+- YouTube configuration (API Key + Video ID) and the song queue & live chat
+  state (`liveChatId`, `nextPageToken`) are all stored in Postgres through
+  Prisma (`YoutubeCredentials`, `YoutubeChatState`, `QueueItem`) — making
+  this safe to deploy to platforms with read-only/ephemeral filesystems
+  (such as Vercel), since none of it depends on local files or `.env` for
+  persistent data anymore.
 - A public YouTube API key is sufficient for reading live chat and video metadata
-   from a public live video. If you want to read chat from an unlisted/private video, YouTube OAuth is required instead of an API key alone.
-- The `search.list` quota (100 units/call) is significantly more expensive than 
-   `videos.list/liveChatMessages.list` (1–5 units) — this is why `!request` only accepts direct YouTube links instead of free-text titles searched through `search.list`. See the "Rate Limits & Stale liveChatId" section above for how to minimize the quota cost of live chat polling.
+  from a public live video. If you want to read chat from an unlisted/private video, YouTube OAuth is required instead of an API key alone.
+- The `search.list` quota (100 units/call) is significantly more expensive than
+  `videos.list/liveChatMessages.list` (1–5 units) — this is why `!request` only
+  accepts direct YouTube links instead of free-text titles searched through `search.list`.
+  See the "Rate Limits & Stale liveChatId" section above for how to minimize the quota cost of live chat polling.
