@@ -3,6 +3,8 @@ import { resolveLiveChatId, fetchChatMessages, parseRequestCommand, resolveReque
 import { getYoutubeState, saveYoutubeState, addToQueue } from "@/lib/store";
 import { getYoutubeConfig } from "@/lib/config";
 
+export const dynamic = "force-dynamic";
+
 interface PollResult {
   checked: number;
   queued: { videoId: string; title: string; requestedBy: string }[];
@@ -22,8 +24,17 @@ export async function GET() {
   }
   const { apiKey, videoId } = config;
 
+  const state = await getYoutubeState();
+  const minIntervalMs = state.pollingIntervalMs ?? 5000;
+  if (state.lastPolledAt && Date.now() - state.lastPolledAt < minIntervalMs) {
+    return NextResponse.json({
+      skipped_poll: true,
+      reason: "too_soon",
+      pollingIntervalMs: minIntervalMs
+    });
+  }
+
   try {
-    const state = await getYoutubeState();
     let liveChatId = state.liveChatId;
     const nextPageToken = state.nextPageToken;
 
@@ -37,8 +48,15 @@ export async function GET() {
       apiKey,
       nextPageToken
     );
-    await saveYoutubeState({ nextPageToken: newPageToken });
-
+    // Never poll faster than YouTube's own suggested interval, plus a small
+    // safety margin — this is what actually caused the rate-limit spiral.
+    const safePollingIntervalMs = Math.max(pollingIntervalMs, 5000) + 5000;
+    await saveYoutubeState({
+      nextPageToken: newPageToken,
+      lastPolledAt: Date.now(),
+      pollingIntervalMs: safePollingIntervalMs
+    });
+    
     const result: PollResult = { checked: messages.length, queued: [], skipped: [] };
 
     // Process every "!request" in this batch, in order, so nothing gets
@@ -65,9 +83,6 @@ export async function GET() {
       }
     }
 
-    // Never poll faster than YouTube's own suggested interval, plus a small
-    // safety margin — this is what actually caused the rate-limit spiral.
-    const safePollingIntervalMs = Math.max(pollingIntervalMs, 5000) + 5000;
     return NextResponse.json({ ...result, pollingIntervalMs: safePollingIntervalMs });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "unknown_error";
@@ -89,7 +104,17 @@ export async function GET() {
       message.includes("liveChatNotFound") ||
       message.includes("liveChatEnded")
     ) {
-      saveYoutubeState({ liveChatId: undefined, nextPageToken: undefined });
+      await saveYoutubeState({ liveChatId: undefined, nextPageToken: undefined });
+    } else if (message.includes("rateLimitExceeded")) {
+      // We still hit the rate limit despite the guard above — most likely
+      // two requests landed close enough together to both pass the check
+      // before either updated lastPolledAt. Record this attempt now, with
+      // a bit of backoff, so the very next caller doesn't immediately
+      // retry into the same wall.
+      await saveYoutubeState({
+        lastPolledAt: Date.now(),
+        pollingIntervalMs: minIntervalMs + 5000
+      });
     }
 
     console.error(err);

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getQueue } from "@/lib/store";
 
+export const dynamic = "force-dynamic";
+
 // The widget polls this to know what to play and what's coming up.
 // queue[0] is "now playing"; everything after that is "up next".
 export async function GET() {

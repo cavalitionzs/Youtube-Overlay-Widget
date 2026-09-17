@@ -19,9 +19,11 @@ model YoutubeCredentials {
 }
 
 model YoutubeChatState {
-  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  liveChatId    String? @db.VarChar(200)
-  nextPageToken String? @db.VarChar(1000)
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  liveChatId        String?   @db.VarChar(200)
+  nextPageToken     String?   @db.VarChar(1000)
+  lastPolledAt      DateTime?
+  pollingIntervalMs Int?
 }
 
 model QueueItem {

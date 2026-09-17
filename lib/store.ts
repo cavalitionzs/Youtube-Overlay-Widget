@@ -16,6 +16,8 @@ export interface QueueItem {
 interface YoutubeState {
   liveChatId?: string;
   nextPageToken?: string;
+  lastPolledAt?: number; // epoch ms
+  pollingIntervalMs?: number;
 }
 
 function toQueueItem(row: {
@@ -40,7 +42,9 @@ export async function getYoutubeState(): Promise<YoutubeState> {
   if (!row) return {};
   return {
     liveChatId: row.liveChatId ?? undefined,
-    nextPageToken: row.nextPageToken ?? undefined
+    nextPageToken: row.nextPageToken ?? undefined,
+    lastPolledAt: row.lastPolledAt?.getTime(),
+    pollingIntervalMs: row.pollingIntervalMs ?? undefined
   };
 }
 
@@ -54,6 +58,13 @@ export async function saveYoutubeState(update: YoutubeState): Promise<void> {
   // as undefined" once destructured.
   const liveChatId = "liveChatId" in update ? update.liveChatId ?? null : undefined;
   const nextPageToken = "nextPageToken" in update ? update.nextPageToken ?? null : undefined;
+  const lastPolledAt =
+    "lastPolledAt" in update
+      ? update.lastPolledAt !== undefined
+        ? new Date(update.lastPolledAt)
+        : null
+      : undefined;
+  const pollingIntervalMs = "pollingIntervalMs" in update ? update.pollingIntervalMs ?? null : undefined;
 
   if (existing) {
     await prisma.youtubeChatState.update({
@@ -62,7 +73,12 @@ export async function saveYoutubeState(update: YoutubeState): Promise<void> {
     });
   } else {
     await prisma.youtubeChatState.create({
-      data: { liveChatId: liveChatId ?? null, nextPageToken: nextPageToken ?? null }
+      data: {
+        liveChatId: liveChatId ?? null,
+        nextPageToken: nextPageToken ?? null,
+        lastPolledAt: lastPolledAt ?? null,
+        pollingIntervalMs: pollingIntervalMs ?? null
+      }
     });
   }
 }

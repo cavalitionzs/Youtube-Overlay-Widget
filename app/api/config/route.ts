@@ -6,6 +6,8 @@ import {
   deleteYoutubeConfig
 } from "@/lib/config";
 
+export const dynamic = "force-dynamic";
+
 // GET: read the current config (404 if none has been added yet).
 export async function GET() {
   const config = await getYoutubeConfig();
