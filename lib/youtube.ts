@@ -90,24 +90,9 @@ async function getVideoTitle(videoId: string, apiKey: string): Promise<string | 
   return data.items?.[0]?.snippet?.title ?? null;
 }
 
-/**
- * Resolves the argument of a "!request <link>" message into a playable
- * video. Only accepts a direct YouTube link — free-text search was removed
- * because it required search.list, which costs 100 quota units per call
- * (100x more than the videos.list lookup used here), and was the single
- * biggest contributor to hitting the daily quota.
- */
-// export async function resolveRequest(argument: string, apiKey: string): Promise<ResolvedVideo | null> {
-//   const directId = extractYoutubeVideoId(argument);
-//   if (!directId) return null;
-
-//   const title = (await getVideoTitle(directId, apiKey)) ?? "Unknown title";
-//   return { videoId: directId, title };
-// }
-
 // ---------------------------------------------------------------------------
 // Text search: "!request <judul>" and "!request <judul> <artis>"
-
+//
 // search.list costs 100 quota units per call (videos.list costs 1), so every
 // search is protected by: a persistent cache, a daily search budget, and a
 // limit of one fresh search per viewer per poll batch.

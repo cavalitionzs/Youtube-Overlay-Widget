@@ -250,8 +250,7 @@ export default function WidgetPage() {
         <div style={idleStyle}>
           <YoutubeMark />
           <span>
-            Waiting for a song request — type !request &lt;YouTube link or song
-            title&gt;
+            Waiting for a song request — type !request &lt;YouTube link or song title&gt;
           </span>
         </div>
       )}

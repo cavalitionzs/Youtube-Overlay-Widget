@@ -47,7 +47,7 @@ export default function DashboardPage() {
           }}
         >
           Viewers type <code style={codeStyle}>!request</code> with a YouTube
-          link in your live chat, it joins the queue, and the overlay plays it
+          link or a song title in your live chat, it joins the queue, and the overlay plays it
           automatically.
         </p>
 
@@ -76,12 +76,14 @@ export default function DashboardPage() {
             }}
           >
             A chat message like{" "}
-            <code style={codeStyle}>!request https://youtu.be/dQw4w9WgXcQ</code>{" "}
-            gets added to the queue. Only a direct YouTube link is accepted —
-            free-text title search was removed because it burns 100x more
-            YouTube API quota per request than resolving a link. Requests play
-            in the order they arrive — the next one starts automatically when
-            the current video ends.
+            <code style={codeStyle}>!request https://youtu.be/dQw4w9WgXcQ</code>,{" "}
+            <code style={codeStyle}>!request Judul Lagu</code> or{" "}
+            <code style={codeStyle}>!request Judul Lagu Nama Artis</code>{" "}
+            gets added to the queue. Title searches cost 100x more YouTube API
+            quota than a link, so they are cached, limited to one fresh search
+            per viewer per check, and capped per day. Requests play in the
+            order they arrive — the next one starts automatically when the
+            current video ends.
           </p>
         </Card>
 
