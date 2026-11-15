@@ -88,7 +88,10 @@ export async function GET() {
           requestedAt: Date.now()
         });
         result.queued.push({ ...outcome.video, requestedBy: message.authorName });
-      } catch {
+      } catch (err) {
+        // Most common cause after upgrading: the SearchCache table / Prisma
+        // client are missing — run `npm run db:push` and `npx prisma generate`.
+        console.error("[poll] failed to process request", { query }, err);
         result.skipped.push({ requestedBy: message.authorName, query, reason: "resolve_failed" });
       }
     }
