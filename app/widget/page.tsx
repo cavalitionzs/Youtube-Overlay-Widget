@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 interface QueueItem {
+  id: number;
   videoId: string;
   title: string;
   requestedBy: string;
@@ -27,6 +28,7 @@ declare global {
           height: string | number;
           playerVars?: Record<string, number>;
           events?: {
+            onReady?: () => void;
             onStateChange?: (event: { data: number }) => void;
             onError?: (event: { data: number }) => void;
           };
@@ -51,6 +53,7 @@ export default function WidgetPage() {
   const [current, setCurrent] = useState<QueueItem | null>(null);
   const [upcoming, setUpcoming] = useState<QueueItem[]>([]);
   const [playerError, setPlayerError] = useState<string | null>(null);
+  const [playerReady, setPlayerReady] = useState(false);
   const playerRef = useRef<YTPlayer | null>(null);
   const loadedVideoIdRef = useRef<string | null>(null);
   const lastProgressRef = useRef<{ time: number; checkedAt: number }>({
@@ -58,19 +61,23 @@ export default function WidgetPage() {
     checkedAt: Date.now(),
   });
   const hasAdvancedRef = useRef(false);
+  const currentIdRef = useRef<number | null>(null);
   const searchParams =
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search)
       : null;
   const driveYoutubePoll = searchParams?.get("youtube") === "1";
 
-  async function advanceQueueOnServer() {
+  async function advanceQueueOnServer(reason: "ended" | "error" | "stalled") {
     if (hasAdvancedRef.current) return;
     hasAdvancedRef.current = true;
     try {
       await fetch("/api/youtube/advance", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         cache: "no-store",
+        // The server only advances if this item is still the current one.
+        body: JSON.stringify({ id: currentIdRef.current, reason }),
       });
     } catch {
       // transient error — the next queue poll will catch up regardless
@@ -80,16 +87,22 @@ export default function WidgetPage() {
   // Load the YouTube IFrame Player API once and create the player.
   useEffect(() => {
     function createPlayer() {
-      if (!window.YT) return;
+      if (!window.YT || playerRef.current) return; // never create two players
       playerRef.current = new window.YT.Player("yt-player", {
         width: "100%",
         height: "100%",
         playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0 },
         events: {
+          // The player object exists right after `new YT.Player(...)`, but
+          // methods like loadVideoById/playVideo/getCurrentTime are only
+          // attached once it reports ready. Calling them earlier throws
+          // "loadVideoById is not a function" (e.g. right after a refresh,
+          // when the queue already has a current song).
+          onReady: () => setPlayerReady(true),
           onStateChange: (event) => {
             if (!window.YT) return;
             if (event.data === window.YT.PlayerState.ENDED) {
-              advanceQueueOnServer();
+              advanceQueueOnServer("ended");
             } else if (event.data === window.YT.PlayerState.PAUSED) {
               playerRef.current?.playVideo();
             }
@@ -98,7 +111,8 @@ export default function WidgetPage() {
             setPlayerError(
               PLAYER_ERROR_MESSAGES[event.data] ?? "This video can't be played",
             );
-            advanceQueueOnServer();
+            console.warn("[widget] player error", event.data);
+            advanceQueueOnServer("error");
           },
         },
       });
@@ -149,22 +163,23 @@ export default function WidgetPage() {
 
   // Cue a new video into the player only when "current" actually changes.
   useEffect(() => {
-    if (!current || !playerRef.current) return;
+    if (!current || !playerReady || !playerRef.current) return;
     if (loadedVideoIdRef.current === current.videoId) return;
     loadedVideoIdRef.current = current.videoId;
+    currentIdRef.current = current.id;
     hasAdvancedRef.current = false;
     setPlayerError(null);
     lastProgressRef.current = { time: 0, checkedAt: Date.now() };
     playerRef.current.loadVideoById(current.videoId);
-  }, [current]);
+  }, [current, playerReady]);
 
   useEffect(() => {
-    if (!current) return;
+    if (!current || !playerReady) return;
 
     const STALL_THRESHOLD_MS = 15000;
     const id = setInterval(() => {
       const player = playerRef.current;
-      if (!player) return;
+      if (!player || typeof player.getCurrentTime !== "function") return;
 
       const now = Date.now();
       const time = player.getCurrentTime();
@@ -177,13 +192,13 @@ export default function WidgetPage() {
 
       if (now - last.checkedAt > STALL_THRESHOLD_MS) {
         setPlayerError("Playback stalled");
-        advanceQueueOnServer();
+        advanceQueueOnServer("stalled");
         lastProgressRef.current = { time, checkedAt: now };
       }
     }, 5000);
 
     return () => clearInterval(id);
-  }, [current]);
+  }, [current, playerReady]);
 
   // Drive the YouTube chat -> queue poller from this same widget instance.
   // The delay between polls adapts to what YouTube's API itself recommends
@@ -235,7 +250,8 @@ export default function WidgetPage() {
         <div style={idleStyle}>
           <YoutubeMark />
           <span>
-            Waiting for a song request — type !request &lt;YouTube link&gt;
+            Waiting for a song request — type !request &lt;YouTube link or song
+            title&gt;
           </span>
         </div>
       )}

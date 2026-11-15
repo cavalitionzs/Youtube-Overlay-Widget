@@ -33,3 +33,15 @@ model QueueItem {
   requestedBy String   @db.VarChar(200)
   requestedAt DateTime @default(now())
 }
+
+// Cache of "!request <judul lagu>" searches. Every row also doubles as a
+// record that one search.list call (100 quota units) was made, which is
+// how the daily search budget is counted. An empty videoId means "searched,
+// found nothing" (negative cache).
+model SearchCache {
+  id        Int      @id @default(autoincrement())
+  query     String   @unique @db.VarChar(300)
+  videoId   String   @db.VarChar(50)
+  title     String   @db.VarChar(500)
+  createdAt DateTime @default(now())
+}

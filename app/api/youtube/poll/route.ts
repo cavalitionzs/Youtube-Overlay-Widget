@@ -13,7 +13,7 @@ interface PollResult {
 
 // Call this endpoint on an interval (the widget page does this automatically
 // when opened with ?youtube=1) to check for new chat messages and queue any
-// "!request <link or title>" commands found in them.
+// "!request <link | judul | judul + artis>" commands found in them.
 export async function GET() {
   const config = await getYoutubeConfig();
   if (!config) {
@@ -61,23 +61,33 @@ export async function GET() {
 
     // Process every "!request" in this batch, in order, so nothing gets
     // dropped when several viewers request at once — they all join the queue.
+    //
+    // Text searches (judul / judul + artis) cost 100 quota units each, so a
+    // viewer gets at most ONE fresh search per batch; links and already-cached
+    // titles are unaffected.
+    const searchedAuthors = new Set<string>();
+
     for (const message of messages) {
       const query = parseRequestCommand(message.text);
       if (!query) continue;
 
       try {
-        const video = await resolveRequest(query, apiKey);
-        if (!video) {
-          result.skipped.push({ requestedBy: message.authorName, query, reason: "not_a_youtube_link" });
+        const outcome = await resolveRequest(query, apiKey, {
+          allowSearch: !searchedAuthors.has(message.authorName)
+        });
+        if (!outcome.ok) {
+          result.skipped.push({ requestedBy: message.authorName, query, reason: outcome.reason });
           continue;
         }
+        if (outcome.source === "search") searchedAuthors.add(message.authorName);
+
         await addToQueue({
-          videoId: video.videoId,
-          title: video.title,
+          videoId: outcome.video.videoId,
+          title: outcome.video.title,
           requestedBy: message.authorName,
           requestedAt: Date.now()
         });
-        result.queued.push({ ...video, requestedBy: message.authorName });
+        result.queued.push({ ...outcome.video, requestedBy: message.authorName });
       } catch {
         result.skipped.push({ requestedBy: message.authorName, query, reason: "resolve_failed" });
       }

@@ -1,7 +1,7 @@
 # YouTube Chat Widget
 
 A "Now Playing" widget for OBS that is connected to YouTube Live Chat:
-Whenever a viewer sends a link in the chat,
+Whenever a viewer sends a YouTube link **or a song title** in the chat,
 the song is automatically played and displayed in the widget.
 Built with **Next.js (App Router) + TypeScript + Prisma (PostgreSQL)**.
 
@@ -10,7 +10,7 @@ Built with **Next.js (App Router) + TypeScript + Prisma (PostgreSQL)**.
 ```
 prisma/
   schema.prisma                      # YoutubeCredentials model (one row: YOUTUBE_API_KEY +
-                                       YOUTUBE_VIDEO_ID)
+                                       YOUTUBE_VIDEO_ID), plus SearchCache (title-search cache)
 app/
   page.tsx                           # dashboard: manage YouTube configuration & widget link
   components/YoutubeConfigPanel.tsx  # UI for adding / changing Video ID / deleting
@@ -25,7 +25,7 @@ app/
 lib/
   prisma.ts                          # PrismaClient instance
   config.ts                          # read/write YouTube configuration in the database
-  youtube.ts                         # YouTube Data API calls: live chat, resolve video links
+  youtube.ts                         # YouTube Data API calls: live chat, resolve links / title search
   store.ts                           # local JSON file storage for queue & live chat state
 ```
 
@@ -90,11 +90,21 @@ The `?youtube=1` parameter makes that widget instance also monitor YouTube chat.
 
 ## How the Song Request Flow Works
 
-1. A viewer sends a chat message, for example: `!request https://youtu.be/dQw4w9WgXcQ`.
+1. A viewer sends a chat message in one of these forms:
+   - `!request https://youtu.be/dQw4w9WgXcQ` — direct link
+   - `!request Judul Lagu` — song title
+   - `!request Judul Lagu Nama Artis` — title + artist (more specific; `Judul - Artis` also works)
 2. `app/api/youtube/poll` retrieves the API Key & Video ID from
    the database (`lib/config.ts`), reads new messages through the YouTube Data API, and detects the `!request` command in `lib/youtube.ts`.
-3. The argument must be a YouTube link — the video ID is extracted directly from the link.
-   If it is not a link (for example, a regular song title), the request is skipped (`skipped`, reason `not_a_youtube_link`) and is not added to the queue.
+3. `resolveRequest` in `lib/youtube.ts` decides how to resolve the argument:
+   - **YouTube link** → the video ID is extracted directly (1 quota unit, same as before).
+   - **Other URL** (Spotify, etc.) → skipped, reason `unsupported_link`.
+   - **Free text** → looked up in the `SearchCache` table first; on a miss it calls `search.list`
+     (top 5 embeddable videos) and then `videos.list` to drop live streams, private/non-embeddable
+     videos and videos longer than the max duration, preferring one in the Music category.
+     If nothing playable is found the request is skipped (`no_results`).
+     Possible `skipped` reasons: `empty_query`, `unsupported_link`, `no_results`, `search_rate_limited`,
+     `search_limit_reached`, `search_failed`, `resolve_failed`.
 4. Successfully resolved videos are added to the **queue** (`lib/store.ts`) and processed
    sequentially according to the order in which the messages were received — the currently playing video is not immediately replaced.
 5. The widget (`app/widget`) polls the queue every few seconds through
@@ -118,7 +128,14 @@ A stored `liveChatId` is automatically reset (and then resolved again from the V
   persistent data anymore.
 - A public YouTube API key is sufficient for reading live chat and video metadata
   from a public live video. If you want to read chat from an unlisted/private video, YouTube OAuth is required instead of an API key alone.
-- The `search.list` quota (100 units/call) is significantly more expensive than
-  `videos.list/liveChatMessages.list` (1–5 units) — this is why `!request` only
-  accepts direct YouTube links instead of free-text titles searched through `search.list`.
-  See the "Rate Limits & Stale liveChatId" section above for how to minimize the quota cost of live chat polling.
+- **Title search and API quota.** `search.list` costs 100 units per call, versus 1 unit for
+  `videos.list` and ~5 for `liveChatMessages.list`; the default project quota is 10,000 units/day
+  (resets at midnight Pacific Time). Title search is therefore protected by:
+  - a persistent cache (`SearchCache`): the same song (ignoring case/punctuation) is only searched
+    once per 30 days; "not found" results are remembered for 6 hours;
+  - a daily budget of fresh searches (default **60** = 6,000 units), counted from the `SearchCache` table;
+  - at most one fresh search per viewer per poll batch.
+
+  Tunable through environment variables (optional):
+  `YOUTUBE_MAX_SEARCHES_PER_DAY` (default `60`) and `YOUTUBE_MAX_SONG_SECONDS` (default `600`, `0` = no limit).
+  Links and cached titles keep working after the daily search budget is used up.

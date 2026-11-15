@@ -119,3 +119,55 @@ export async function removeQueueItem(index: number): Promise<QueueItem[]> {
   }
   return getQueue();
 }
+
+// ---------------------------------------------------------------------------
+// Search cache — used by "!request <judul lagu>" (see lib/youtube.ts).
+// ---------------------------------------------------------------------------
+
+export interface CachedSearch {
+  videoId: string; // "" = a previous search found nothing
+  title: string;
+  createdAt: number; // epoch ms
+}
+
+export async function getCachedSearch(query: string): Promise<CachedSearch | null> {
+  const row = await prisma.searchCache.findUnique({ where: { query } });
+  if (!row) return null;
+  return { videoId: row.videoId, title: row.title, createdAt: row.createdAt.getTime() };
+}
+
+/** Stores the outcome of a search. Pass null to remember "no result found". */
+export async function saveCachedSearch(
+  query: string,
+  video: { videoId: string; title: string } | null
+): Promise<void> {
+  const videoId = video?.videoId ?? "";
+  const title = (video?.title ?? "").slice(0, 500);
+  await prisma.searchCache.upsert({
+    where: { query },
+    create: { query, videoId, title },
+    update: { videoId, title, createdAt: new Date() }
+  });
+}
+
+/** How many real (non-cached) searches were made since the given moment. */
+export async function countSearchesSince(since: Date): Promise<number> {
+  return prisma.searchCache.count({ where: { createdAt: { gte: since } } });
+}
+
+/**
+ * Start of the current YouTube API quota day. Quota resets at midnight
+ * Pacific Time, not at midnight in the streamer's own timezone.
+ */
+export function startOfQuotaDay(now: Date = new Date()): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).formatToParts(now);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const sinceMidnightMs = ((get("hour") * 60 + get("minute")) * 60 + get("second")) * 1000;
+  return new Date(now.getTime() - sinceMidnightMs - now.getMilliseconds());
+}
