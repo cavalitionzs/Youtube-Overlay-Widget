@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 // file on disk can't survive between requests there.
 
 export interface QueueItem {
+  id: number; // database id — lets "advance" target one specific item
   videoId: string;
   title: string;
   requestedBy: string;
@@ -21,12 +22,14 @@ interface YoutubeState {
 }
 
 function toQueueItem(row: {
+  id: number;
   videoId: string;
   title: string;
   requestedBy: string;
   requestedAt: Date;
 }): QueueItem {
   return {
+    id: row.id,
     videoId: row.videoId,
     title: row.title,
     requestedBy: row.requestedBy,
@@ -90,7 +93,7 @@ export async function getQueue(): Promise<QueueItem[]> {
 }
 
 /** Appends a new request to the end of the queue. */
-export async function addToQueue(item: QueueItem): Promise<void> {
+export async function addToQueue(item: Omit<QueueItem, "id">): Promise<void> {
   await prisma.queueItem.create({
     data: {
       videoId: item.videoId,
@@ -101,13 +104,27 @@ export async function addToQueue(item: QueueItem): Promise<void> {
   });
 }
 
-/** Removes the currently-playing item and promotes the next one. Returns the new current item, or null if the queue is now empty. */
-export async function advanceQueue(): Promise<QueueItem | null> {
+/**
+ * Removes the currently-playing item and promotes the next one.
+ *
+ * Pass `expectedId` (the item the caller believes is playing) to make the
+ * call safe against duplicates: if that item is no longer first in the
+ * queue — because another widget instance, a second player event or the
+ * Skip button already advanced it — nothing is removed. Without this a
+ * duplicate "ended" event would delete the NEXT song too.
+ */
+export async function advanceQueue(
+  expectedId?: number
+): Promise<{ advanced: boolean; current: QueueItem | null }> {
   const rows = await prisma.queueItem.findMany({ orderBy: { id: "asc" }, take: 2 });
-  if (rows.length === 0) return null;
+  if (rows.length === 0) return { advanced: false, current: null };
 
-  await prisma.queueItem.delete({ where: { id: rows[0].id } });
-  return rows[1] ? toQueueItem(rows[1]) : null;
+  if (expectedId !== undefined && rows[0].id !== expectedId) {
+    return { advanced: false, current: toQueueItem(rows[0]) };
+  }
+
+  const { count } = await prisma.queueItem.deleteMany({ where: { id: rows[0].id } });
+  return { advanced: count > 0, current: rows[1] ? toQueueItem(rows[1]) : null };
 }
 
 /** Removes a single item from the queue by its position. Returns the updated queue. */

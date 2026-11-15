@@ -107,7 +107,7 @@ async function getVideoTitle(videoId: string, apiKey: string): Promise<string | 
 
 // ---------------------------------------------------------------------------
 // Text search: "!request <judul>" and "!request <judul> <artis>"
-//
+
 // search.list costs 100 quota units per call (videos.list costs 1), so every
 // search is protected by: a persistent cache, a daily search budget, and a
 // limit of one fresh search per viewer per poll batch.
