@@ -45,3 +45,12 @@ model SearchCache {
   title     String   @db.VarChar(500)
   createdAt DateTime @default(now())
 }
+
+// Moderation: is the currently playing song paused? Single row (id = 1).
+// Kept in the database so the queue manager and every widget instance agree,
+// and so the state survives an OBS "Refresh cache of current page".
+model PlaybackState {
+  id        Int      @id @default(1)
+  paused    Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}

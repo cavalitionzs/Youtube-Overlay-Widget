@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface QueueItem {
   videoId: string;
   title: string;
   requestedBy: string;
   requestedAt: number;
+}
+
+interface LastAdvance {
+  at: number;
+  reason: string;
+  advanced: boolean;
+  detail: Record<string, unknown> | null;
 }
 
 interface QueueData {
@@ -17,12 +24,18 @@ interface QueueData {
 export default function QueuePage() {
   const [data, setData] = useState<QueueData>({ current: null, upcoming: [] });
   const [busyIndex, setBusyIndex] = useState<number | null>(null);
+  const [lastAdvance, setLastAdvance] = useState<LastAdvance | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const ignoreServerPauseUntilRef = useRef(0);
 
   async function fetchQueue() {
     try {
       const res = await fetch("/api/youtube/queue", { cache: "no-store" });
       const json = await res.json();
       setData({ current: json.current ?? null, upcoming: json.upcoming ?? [] });
+      setLastAdvance(json.lastAdvance ?? null);
+      if (Date.now() >= ignoreServerPauseUntilRef.current) setPaused(Boolean(json.paused));
     } catch {
       // keep the last known list on a transient network error
     }
@@ -33,6 +46,27 @@ export default function QueuePage() {
     const id = setInterval(fetchQueue, 3000);
     return () => clearInterval(id);
   }, []);
+
+  // Pauses / resumes the current song. While paused the OBS widget stops the
+  // audio and covers the video and title, so nothing shows on stream.
+  async function togglePause() {
+    const next = !paused;
+    setPauseBusy(true);
+    ignoreServerPauseUntilRef.current = Date.now() + 3000;
+    setPaused(next);
+    try {
+      const res = await fetch("/api/youtube/pause", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paused: next })
+      });
+      if (!res.ok) setPaused(!next); // could not save (e.g. db:push not run yet)
+    } catch {
+      setPaused(!next);
+    } finally {
+      setPauseBusy(false);
+    }
+  }
 
   // Skips the song currently playing — it's removed from the queue and
   // whatever was next moves up to "now playing".
@@ -88,8 +122,14 @@ export default function QueuePage() {
           <div style={currentCardStyle}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={currentTitleStyle}>{data.current.title}</div>
-              <div style={requestedByStyle}>diminta oleh {data.current.requestedBy}</div>
+              <div style={requestedByStyle}>
+                diminta oleh {data.current.requestedBy}
+                {paused ? " · ⏸ DIJEDA" : ""}
+              </div>
             </div>
+            <button onClick={togglePause} disabled={pauseBusy} style={pauseButtonStyle}>
+              {paused ? "Lanjutkan" : "Jeda"}
+            </button>
             <button
               onClick={skipCurrent}
               disabled={busyIndex === 0}
@@ -98,6 +138,23 @@ export default function QueuePage() {
               {busyIndex === 0 ? "Melewati…" : "Skip Lagu"}
             </button>
           </div>
+        )}
+
+        {paused && data.current && (
+          <p style={{ margin: "10px 0 0", fontSize: 12.5, color: "var(--muted)", lineHeight: 1.6 }}>
+            Lagu dijeda: layar widget di OBS menampilkan &quot;Paused&quot; dan judulnya
+            disembunyikan. Pilih <b>Lanjutkan</b> untuk meneruskan, atau <b>Skip Lagu</b>
+            untuk membuangnya (lagu berikutnya langsung diputar).
+          </p>
+        )}
+
+        {lastAdvance && (
+          <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--muted)", lineHeight: 1.6 }}>
+            Pergantian lagu terakhir: <b>{lastAdvance.reason}</b>
+            {lastAdvance.advanced ? "" : " (diabaikan)"} ·{" "}
+            {new Date(lastAdvance.at).toLocaleTimeString()}
+            {lastAdvance.detail ? ` · ${JSON.stringify(lastAdvance.detail)}` : ""}
+          </p>
         )}
 
         <h2 style={{ ...sectionLabelStyle, marginTop: 32 }}>
@@ -223,5 +280,17 @@ const removeButtonStyle: React.CSSProperties = {
   background: "transparent",
   color: "var(--muted)",
   fontSize: 12.5,
+  cursor: "pointer"
+};
+
+const pauseButtonStyle: React.CSSProperties = {
+  flex: "none",
+  padding: "9px 16px",
+  borderRadius: 8,
+  border: "1px solid var(--green-dim)",
+  background: "transparent",
+  color: "var(--green)",
+  fontWeight: 700,
+  fontSize: 13,
   cursor: "pointer"
 };

@@ -50,8 +50,8 @@ cp .env.local.example .env.local
    ```bash
    npx prisma db push
    ```
-   This reads `prisma/schema.prisma` (the `YoutubeCredentials` model) and
-   creates the table in the database specified by `DATABASE_URL`.
+   This reads `prisma/schema.prisma` (including the `SearchCache` model used by title search) and
+   creates the tables in the database specified by `DATABASE_URL`.
    Run this command again whenever `schema.prisma` is modified.
 
 Technical note: `prisma/schema.prisma` uses the `prisma-client` generator (instead of the older `prisma-client-js`) with a custom output pointing to lib/generated/prisma. This generator connects to the database through a **driver adapter** (`@prisma/adapter-pg`), rather than the built-in query engine — which is why `lib/prisma.ts` creates `PrismaClient` with `new PrismaClient({ adapter })`, rather than simply using `new PrismaClient()`. The generated output folder (lib/generated/) is ignored through `.gitignore` and recreated automatically by `prisma generate` (which runs automatically through `postinstall` whenever `npm install` is executed).
@@ -103,14 +103,31 @@ The `?youtube=1` parameter makes that widget instance also monitor YouTube chat.
      (top 5 embeddable videos) and then `videos.list` to drop live streams, private/non-embeddable
      videos and videos longer than the max duration, preferring one in the Music category.
      If nothing playable is found the request is skipped (`no_results`).
-     Possible `skipped` reasons: `empty_query`, `unsupported_link`, `no_results`, `search_rate_limited`,
-     `search_limit_reached`, `search_failed`, `resolve_failed`.
+   Possible `skipped` reasons: `empty_query`, `unsupported_link`, `no_results`, `search_rate_limited`,
+   `search_limit_reached`, `search_failed`, `resolve_failed`.
 4. Successfully resolved videos are added to the **queue** (`lib/store.ts`) and processed
    sequentially according to the order in which the messages were received — the currently playing video is not immediately replaced.
 5. The widget (`app/widget`) polls the queue every few seconds through
    `app/api/youtube/queue`, plays the first video using the YouTube IFrame Player, and automatically advances the queue (`app/api/youtube/advance`) when the video finishes
 6. The `/queue` page displays the same queue in real time and provides a **Skip Song**
    button (for the currently playing song) as well as a **Delete** button (for any item in the queue) — these controls are used through a regular browser, not through OBS.
+
+## Pausing a song (moderation)
+
+If a viewer requests something inappropriate you can hold it while you decide:
+
+- **Queue manager (`/queue`)**: the **Jeda** button next to *Skip Lagu* (becomes **Lanjutkan** while paused).
+- **Directly in OBS**: right-click the browser source → **Interact**, then click anywhere on the
+  widget or press **P** / **Space**. A hint ("Click to pause") shows only while the mouse is over the
+  widget in the Interact window — it never appears on the stream.
+
+While paused, the audio stops and the widget covers the video **and the title** with a plain
+"⏸ Paused" screen. The state is stored in the `PlaybackState` table, so it survives a refresh of the
+OBS source. **Skip Lagu** while paused discards the song and starts the next one (the pause is cleared);
+**Lanjutkan** continues from the same position. The widget checks the queue every 2 seconds, so a pause
+from the queue manager reaches OBS within about 2 seconds.
+
+Requires `npm run db:push` and `npx prisma generate` once (new `PlaybackState` model).
 
 ## Rate Limits & Stale liveChatId on YouTube Live Chat
 

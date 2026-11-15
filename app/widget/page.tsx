@@ -15,6 +15,9 @@ interface YTPlayer {
   loadVideoById: (videoId: string) => void;
   playVideo: () => void;
   getCurrentTime: () => number;
+  getDuration: () => number;
+  pauseVideo: () => void;
+  cueVideoById: (videoId: string) => void;
   getPlayerState: () => number;
 }
 
@@ -61,14 +64,29 @@ export default function WidgetPage() {
     checkedAt: Date.now(),
   });
   const hasAdvancedRef = useRef(false);
+  // True once the current video has actually reported PLAYING. A genuine
+  // "ended" can only follow that; an ENDED before it is a spurious event.
+  const startedPlayingRef = useRef(false);
   const currentIdRef = useRef<number | null>(null);
+  // Moderation pause. `pausedRef` mirrors the state so event handlers and
+  // timers never read a stale value; the server value is the source of truth.
+  const [paused, setPaused] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const pausedRef = useRef(false);
+  const ignoreServerPauseUntilRef = useRef(0);
+  // Random per page load: if /queue shows two different instance ids, the
+  // widget is open in more than one place (another OBS scene, a browser tab...).
+  const instanceIdRef = useRef(Math.random().toString(36).slice(2, 6));
   const searchParams =
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search)
       : null;
   const driveYoutubePoll = searchParams?.get("youtube") === "1";
 
-  async function advanceQueueOnServer(reason: "ended" | "error" | "stalled") {
+  async function advanceQueueOnServer(
+    reason: "ended" | "error" | "stalled",
+    detail: Record<string, unknown> = {},
+  ) {
     if (hasAdvancedRef.current) return;
     hasAdvancedRef.current = true;
     try {
@@ -77,7 +95,16 @@ export default function WidgetPage() {
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
         // The server only advances if this item is still the current one.
-        body: JSON.stringify({ id: currentIdRef.current, reason }),
+        body: JSON.stringify({
+          id: currentIdRef.current,
+          reason,
+          detail: {
+            ...detail,
+            instance: instanceIdRef.current,
+            driver: driveYoutubePoll,
+            visibility: document.visibilityState,
+          },
+        }),
       });
     } catch {
       // transient error — the next queue poll will catch up regardless
@@ -101,10 +128,29 @@ export default function WidgetPage() {
           onReady: () => setPlayerReady(true),
           onStateChange: (event) => {
             if (!window.YT) return;
-            if (event.data === window.YT.PlayerState.ENDED) {
-              advanceQueueOnServer("ended");
+            if (event.data === window.YT.PlayerState.PLAYING) {
+              startedPlayingRef.current = true;
+            } else if (event.data === window.YT.PlayerState.ENDED) {
+              const p = playerRef.current;
+              const time = p?.getCurrentTime?.() ?? 0;
+              const duration = p?.getDuration?.() ?? 0;
+              // A real "ended" comes after the video played and at (about)
+              // its end. Anything else — e.g. an ENDED fired while a new
+              // video is still loading — must not throw away the song.
+              const nearEnd = duration === 0 || time >= duration - 5;
+              if (!startedPlayingRef.current || !nearEnd) {
+                console.warn("[widget] ignoring spurious ENDED", {
+                  startedPlaying: startedPlayingRef.current,
+                  time,
+                  duration,
+                });
+                return;
+              }
+              advanceQueueOnServer("ended", { time, duration });
             } else if (event.data === window.YT.PlayerState.PAUSED) {
-              playerRef.current?.playVideo();
+              // Keeps the old behaviour (nobody can pause it by clicking the
+              // video), except when a moderator paused it on purpose.
+              if (!pausedRef.current) playerRef.current?.playVideo();
             }
           },
           onError: (event) => {
@@ -112,7 +158,7 @@ export default function WidgetPage() {
               PLAYER_ERROR_MESSAGES[event.data] ?? "This video can't be played",
             );
             console.warn("[widget] player error", event.data);
-            advanceQueueOnServer("error");
+            advanceQueueOnServer("error", { code: event.data });
           },
         },
       });
@@ -145,6 +191,12 @@ export default function WidgetPage() {
         }
         const data = await res.json();
         if (cancelled) return;
+        // Right after a local pause/resume, ignore replies that were already
+        // in flight: they still carry the old value and would flip it back.
+        if (Date.now() >= ignoreServerPauseUntilRef.current) {
+          pausedRef.current = Boolean(data.paused);
+          setPaused(pausedRef.current);
+        }
         setCurrent(data.current ?? null);
         setUpcoming(data.upcoming ?? []);
       } catch (err) {
@@ -154,7 +206,8 @@ export default function WidgetPage() {
     }
 
     poll();
-    const id = setInterval(poll, 4000);
+    // 2s (was 4s) so a pause from the queue manager reaches OBS quickly.
+    const id = setInterval(poll, 2000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -168,10 +221,57 @@ export default function WidgetPage() {
     loadedVideoIdRef.current = current.videoId;
     currentIdRef.current = current.id;
     hasAdvancedRef.current = false;
+    startedPlayingRef.current = false;
     setPlayerError(null);
     lastProgressRef.current = { time: 0, checkedAt: Date.now() };
-    playerRef.current.loadVideoById(current.videoId);
+    if (pausedRef.current) {
+      // Refreshed while paused: cue the video without starting it.
+      playerRef.current.cueVideoById(current.videoId);
+    } else {
+      playerRef.current.loadVideoById(current.videoId);
+    }
   }, [current, playerReady]);
+
+  // Apply pause / resume to the player when the flag changes.
+  const wasPausedRef = useRef(false);
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!playerReady || !player) return;
+    if (paused) {
+      player.pauseVideo();
+    } else if (wasPausedRef.current) {
+      player.playVideo();
+    }
+    wasPausedRef.current = paused;
+  }, [paused, playerReady]);
+
+  async function setPausedOnServer(next: boolean) {
+    pausedRef.current = next;
+    setPaused(next);
+    ignoreServerPauseUntilRef.current = Date.now() + 3000;
+    try {
+      await fetch("/api/youtube/pause", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ paused: next }),
+      });
+    } catch {
+      // the next queue poll will reconcile with the server
+    }
+  }
+
+  // Keyboard: P or Space toggles pause (when the OBS "Interact" window has focus).
+  useEffect(() => {
+    if (!current) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "p" && e.key !== "P" && e.key !== " ") return;
+      e.preventDefault();
+      setPausedOnServer(!pausedRef.current);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [current]);
 
   useEffect(() => {
     if (!current || !playerReady) return;
@@ -185,6 +285,14 @@ export default function WidgetPage() {
       const time = player.getCurrentTime();
       const last = lastProgressRef.current;
 
+      // A hidden page (background tab, scene that isn't live) can't be judged:
+      // its player may be paused by the browser, which is not a real stall,
+      // and skipping from there would throw away a song other instances play.
+      if (document.visibilityState === "hidden" || pausedRef.current) {
+        lastProgressRef.current = { time, checkedAt: now };
+        return;
+      }
+
       if (time > last.time + 0.5) {
         lastProgressRef.current = { time, checkedAt: now };
         return;
@@ -192,7 +300,7 @@ export default function WidgetPage() {
 
       if (now - last.checkedAt > STALL_THRESHOLD_MS) {
         setPlayerError("Playback stalled");
-        advanceQueueOnServer("stalled");
+        advanceQueueOnServer("stalled", { time });
         lastProgressRef.current = { time, checkedAt: now };
       }
     }, 5000);
@@ -230,6 +338,8 @@ export default function WidgetPage() {
 
   return (
     <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         position: "relative",
         width: "100%",
@@ -239,6 +349,14 @@ export default function WidgetPage() {
       }}
     >
       <div id="yt-player" style={{ width: "100%", height: "100%" }} />
+
+      {/* While paused, cover the video AND the title: the point is to keep
+          whatever was requested off the stream until a moderator decides. */}
+      {paused && current && (
+        <div style={pausedCoverStyle}>
+          <span>⏸ Paused</span>
+        </div>
+      )}
 
       {playerError && (
         <div style={errorBannerStyle}>
@@ -255,7 +373,7 @@ export default function WidgetPage() {
         </div>
       )}
 
-      {current && (
+      {current && !paused && (
         <div style={overlayStyle}>
           <div
             style={{
@@ -276,6 +394,21 @@ export default function WidgetPage() {
                 .join(" · ")}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Click anywhere (OBS: right-click the source → Interact) to pause or
+          resume. This layer also stops clicks from reaching the YouTube
+          iframe. The hint only shows while the mouse is over the widget, so
+          it never appears on the stream itself. */}
+      {current && (
+        <div
+          onClick={() => setPausedOnServer(!pausedRef.current)}
+          style={clickLayerStyle}
+        >
+          <div style={{ ...hintStyle, opacity: hovered ? 1 : 0 }}>
+            {paused ? "▶ Click to resume (or press P)" : "⏸ Click to pause (or press P)"}
+          </div>
         </div>
       )}
     </div>
@@ -356,4 +489,36 @@ const errorBannerStyle: React.CSSProperties = {
   color: "#ffe3e3",
   fontSize: 12.5,
   fontWeight: 600,
+};
+
+const pausedCoverStyle: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "#0c0c0c",
+  color: "#e7e7e7",
+  fontSize: 15,
+  fontWeight: 600,
+};
+
+const clickLayerStyle: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  cursor: "pointer",
+};
+
+const hintStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 12,
+  right: 12,
+  padding: "6px 10px",
+  borderRadius: 8,
+  background: "rgba(8,8,8,.85)",
+  color: "#f6f7f3",
+  fontSize: 12,
+  fontWeight: 600,
+  transition: "opacity .15s",
+  pointerEvents: "none",
 };

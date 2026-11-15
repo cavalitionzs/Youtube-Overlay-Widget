@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { advanceQueue } from "@/lib/store";
+import { advanceQueue, recordAdvance } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +15,17 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const expectedId: number | undefined = typeof body?.id === "number" ? body.id : undefined;
   const reason: string = typeof body?.reason === "string" ? body.reason : "manual";
+  const detail = body?.detail && typeof body.detail === "object" ? JSON.stringify(body.detail) : "";
 
   const { advanced, current } = await advanceQueue(expectedId);
+  recordAdvance({
+    at: Date.now(),
+    reason,
+    advanced,
+    detail: body?.detail && typeof body.detail === "object" ? body.detail : null
+  });
   console.log(
-    `[advance] reason=${reason} id=${expectedId ?? "-"} -> ${
+    `[advance] reason=${reason} id=${expectedId ?? "-"} ${detail} -> ${
       advanced ? "advanced" : "ignored (already advanced / stale)"
     }`
   );

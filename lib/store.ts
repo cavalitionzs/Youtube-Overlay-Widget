@@ -124,6 +124,7 @@ export async function advanceQueue(
   }
 
   const { count } = await prisma.queueItem.deleteMany({ where: { id: rows[0].id } });
+  if (count > 0) await clearPause(); // skipping a paused song starts the next one
   return { advanced: count > 0, current: rows[1] ? toQueueItem(rows[1]) : null };
 }
 
@@ -133,6 +134,7 @@ export async function removeQueueItem(index: number): Promise<QueueItem[]> {
   const target = rows[index];
   if (target) {
     await prisma.queueItem.delete({ where: { id: target.id } });
+    if (index === 0) await clearPause();
   }
   return getQueue();
 }
@@ -187,4 +189,64 @@ export function startOfQuotaDay(now: Date = new Date()): Date {
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
   const sinceMidnightMs = ((get("hour") * 60 + get("minute")) * 60 + get("second")) * 1000;
   return new Date(now.getTime() - sinceMidnightMs - now.getMilliseconds());
+}
+
+// ---------------------------------------------------------------------------
+// Last "advance" (song change) — shown on /queue to diagnose unexpected skips.
+// Kept in memory on globalThis (shared by all route bundles in `next dev`);
+// it's debug info only, so it's fine that it resets on server restart.
+// ---------------------------------------------------------------------------
+
+export interface LastAdvance {
+  at: number; // epoch ms
+  reason: string; // ended | error | stalled | manual
+  advanced: boolean; // false = ignored as stale/duplicate
+  detail: Record<string, unknown> | null; // widget instance id, player time, visibility, ...
+}
+
+const advanceGlobal = globalThis as unknown as { __lastAdvance?: LastAdvance };
+
+export function recordAdvance(info: LastAdvance): void {
+  advanceGlobal.__lastAdvance = info;
+}
+
+export function getLastAdvance(): LastAdvance | null {
+  return advanceGlobal.__lastAdvance ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Pause (moderation) — "hold the current song while I check what it is".
+// ---------------------------------------------------------------------------
+
+let warnedMissingPlaybackTable = false;
+
+/** Whether the current song is paused. Never throws: if the table isn't there yet, reads as "not paused". */
+export async function getPaused(): Promise<boolean> {
+  try {
+    const row = await prisma.playbackState.findUnique({ where: { id: 1 } });
+    return row?.paused ?? false;
+  } catch (err) {
+    if (!warnedMissingPlaybackTable) {
+      warnedMissingPlaybackTable = true;
+      console.error("[pause] cannot read PlaybackState — run `npm run db:push` and `npx prisma generate`", err);
+    }
+    return false;
+  }
+}
+
+export async function setPaused(paused: boolean): Promise<void> {
+  await prisma.playbackState.upsert({
+    where: { id: 1 },
+    create: { id: 1, paused },
+    update: { paused }
+  });
+}
+
+/** Called whenever the current song is removed, so the next song isn't born paused. Best effort. */
+async function clearPause(): Promise<void> {
+  try {
+    await prisma.playbackState.updateMany({ where: { id: 1 }, data: { paused: false } });
+  } catch {
+    // table missing (db:push not run yet) — nothing to clear
+  }
 }
